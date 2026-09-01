@@ -1046,6 +1046,23 @@ class Tests(unittest.TestCase):
             m.bus.add_time(5)
             time.sleep(0.1)
 
+    @unittest.skipIf(os.getenv("TEST_CFG_REALRELAY"), "Needs fake relay")
+    @mobile_process_test("--relay", "127.0.0.1",
+                         "--config", "config_test_notoken.bin")
+    def test_relay_no_token(self, m):
+        # Without a relay token configured, the relay server won't accept a
+        # handshake at all: the library should fail fast (no retries, no
+        # hang) rather than repeatedly trying to negotiate one. Uses its
+        # own config file: config_test.bin may carry a token over from
+        # another test (tokens persist across runs by design), which would
+        # defeat the "no token" scenario this is testing.
+        with SimpleRelayServer():
+            m.cmd_start()
+            t0 = time.time()
+            self.assertEqual(m.cmd_wait_call(error=True), 3)
+            self.assertLess(time.time() - t0, 1)
+            m.cmd_end()
+
     @mobile_process_test("--relay", "127.0.0.1", "--relay-token", "01" * 16)
     def test_relay_connection(self, m):
         p2 = MobileProcess("--relay", "127.0.0.1",
@@ -1087,7 +1104,7 @@ class Tests(unittest.TestCase):
 
 
 def cleanup():
-    files = ["config_test.bin", "config_test_p2.bin"]
+    files = ["config_test.bin", "config_test_p2.bin", "config_test_notoken.bin"]
     for file in files:
         try:
             os.remove(file)
