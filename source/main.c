@@ -6,6 +6,7 @@
 #include <locale.h>
 #include <signal.h>
 #include <wchar.h>
+#include <inttypes.h>
 
 #include <mobile.h>
 #include <mobile_inet.h>
@@ -13,10 +14,20 @@
 #include "bgblink.h"
 #include "socket.h"
 #include "socket_impl.h"
+#include "device_auth.h"
+#include "dns_resolve.h"
+
+// Fixed hostname the device-auth server is discovered at, resolved through
+// the same DNS1/DNS2 servers configured for the emulated game's own DNS
+// (see dns_resolve.c for why the frontend can't just use the OS resolver).
+#define DEVICE_AUTH_HOSTNAME "device.auth.dion.ne.jp"
 
 struct mobile_user {
     struct mobile_adapter *adapter;
     struct socket_impl socket;
+    struct device_auth_state device_auth;
+    struct dns_resolve_state device_auth_dns;
+    bool device_auth_dns_pending;
     enum mobile_action action;
     FILE *config;
     volatile bool reset;
@@ -153,6 +164,20 @@ static void impl_update_number(void *user, enum mobile_number type, const char *
     update_title(mobile);
 }
 
+static void impl_update_device_auth(void *user, enum mobile_device_auth_action action, const unsigned char *ppp_id, unsigned ppp_id_size, uint64_t counter, const unsigned char *sig)
+{
+    struct mobile_user *mobile = user;
+    // TEMPORARY (integration-testing phase): confirm the core is firing
+    // the callback at all, before device_auth even gets involved.
+    fprintf(stderr, "[device-auth] callback fired: action=%s ppp_id=\"%.*s\" "
+        "counter=%" PRIu64 "%s\n",
+        action == MOBILE_DEVICE_AUTH_AUTHORIZE ? "authorize" : "deauthorize",
+        (int)ppp_id_size, ppp_id, counter,
+        mobile->device_auth.enabled ? "" :
+            " (device-auth disabled, dropping)");
+    device_auth_notify(&mobile->device_auth, action, ppp_id, ppp_id_size, counter, sig);
+}
+
 static volatile bool signal_int_trig = false;
 static void signal_int(int signo)
 {
@@ -260,6 +285,10 @@ static void show_help_full(void)
         "--relay addr        Set relay server for P2P communications\n"
         "--relay-token hex   Set relay token (or empty to clear)\n"
         "--no-port-redir     Set the adapter to use port 25 during SMTP requests\n"
+        "--device-auth addr  Override the device-auth server address instead of\n"
+        "                    discovering it via DNS\n"
+        "--device-auth-port port  Set the device-auth server port "
+            "(default 80)\n"
     );
     exit(EXIT_SUCCESS);
 }
@@ -351,6 +380,8 @@ int main(int argc, char *argv[])
     bool relay_token_update = false;
     unsigned char *relay_token = NULL;
     unsigned char relay_token_buf[MOBILE_RELAY_TOKEN_SIZE];
+    struct mobile_addr device_auth_addr = {0};
+    unsigned device_auth_port = DEVICE_AUTH_DEFAULT_PORT;
 
     (void)argc;
     while (*++argv) {
@@ -418,6 +449,14 @@ int main(int argc, char *argv[])
             argv += 1;
         } else if (strcmp(*argv, "--no-port-redir") == 0) {
             change_mail_port = false;
+        } else if (strcmp(*argv, "--device-auth") == 0) {
+            main_checkparam(argv);
+            main_parse_addr(&device_auth_addr, argv);
+            argv += 1;
+        } else if (strcmp(*argv, "--device-auth-port") == 0) {
+            main_checkparam(argv);
+            device_auth_port = strtol(argv[1], NULL, 0);
+            argv += 1;
         } else {
             fprintf(stderr, "Unknown option: %s\n", *argv);
             show_help();
@@ -465,6 +504,7 @@ int main(int argc, char *argv[])
     mobile->number_user[0] = '\0';
     mobile->number_peer[0] = '\0';
     socket_impl_init(&mobile->socket);
+    mobile->device_auth_dns_pending = false;
 
     // Initialize mobile library
     mobile->adapter = mobile_new(mobile);
@@ -481,6 +521,7 @@ int main(int argc, char *argv[])
     mobile_def_sock_send(mobile->adapter, impl_sock_send);
     mobile_def_sock_recv(mobile->adapter, impl_sock_recv);
     mobile_def_update_number(mobile->adapter, impl_update_number);
+    mobile_def_update_device_auth(mobile->adapter, impl_update_device_auth);
 
     mobile_config_load(mobile->adapter);
     mobile_config_set_device(mobile->adapter, device, device_unmetered);
@@ -494,6 +535,20 @@ int main(int argc, char *argv[])
         mobile_config_set_relay_token(mobile->adapter, relay_token);
     }
     mobile_config_save(mobile->adapter);
+
+    // Set up the device-auth HTTP client. If the user didn't override the
+    // server address explicitly, discover it via DNS instead (see
+    // dns_resolve.c); device_auth stays disabled (a no-op) until that
+    // finishes.
+    if (device_auth_addr.type != MOBILE_ADDRTYPE_NONE) {
+        main_set_port(&device_auth_addr, device_auth_port);
+        device_auth_init(&mobile->device_auth, &device_auth_addr);
+    } else {
+        device_auth_init(&mobile->device_auth, NULL);
+        mobile->device_auth_dns_pending = true;
+        dns_resolve_start(&mobile->device_auth_dns, DEVICE_AUTH_HOSTNAME,
+            &dns1, &dns2);
+    }
 
     // Initialize windows sockets
 #ifdef _WIN32
@@ -552,15 +607,42 @@ int main(int argc, char *argv[])
         if (!bgb_loop(&bgb_state)) break;
         if (!mobile_handle_loop(mobile)) break;
 
+        // Progress the device-auth hostname lookup, if one is pending, and
+        // hand its result off to the device-auth client once it's done.
+        if (mobile->device_auth_dns_pending) {
+            dns_resolve_poll(&mobile->device_auth_dns);
+            if (mobile->device_auth_dns.done) {
+                mobile->device_auth_dns_pending = false;
+                if (mobile->device_auth_dns.success) {
+                    main_set_port(&mobile->device_auth_dns.result,
+                        device_auth_port);
+                    device_auth_init(&mobile->device_auth,
+                        &mobile->device_auth_dns.result);
+                } else {
+                    fprintf(stderr, "[device-auth] Could not resolve "
+                        DEVICE_AUTH_HOSTNAME ", disabling\n");
+                }
+            }
+        }
+
+        // Progress any in-flight device-auth HTTP requests
+        device_auth_poll(&mobile->device_auth);
+
         // Wait for any of the sockets to do something
         // Time out after 100ms
-        SOCKET sockets[1 + MOBILE_MAX_CONNECTIONS];
+        SOCKET sockets[1 + MOBILE_MAX_CONNECTIONS + DEVICE_AUTH_MAX_PENDING + 1];
         unsigned socket_count = 0;
         sockets[socket_count++] = bgb_sock;
         for (unsigned i = 0; i < MOBILE_MAX_CONNECTIONS; i++) {
             SOCKET fd = mobile->socket.sockets[i];
             if (fd == INVALID_SOCKET) continue;
             sockets[socket_count++] = fd;
+        }
+        socket_count += device_auth_collect_sockets(&mobile->device_auth,
+            sockets + socket_count, DEVICE_AUTH_MAX_PENDING);
+        if (mobile->device_auth_dns_pending) {
+            socket_count += dns_resolve_collect_sockets(
+                &mobile->device_auth_dns, sockets + socket_count, 1);
         }
         socket_wait(sockets, socket_count, 100);
     }
@@ -571,6 +653,11 @@ int main(int argc, char *argv[])
 
     // Close all sockets
     socket_impl_stop(&mobile->socket);
+    device_auth_stop(&mobile->device_auth);
+    if (mobile->device_auth_dns_pending &&
+            mobile->device_auth_dns.sock != INVALID_SOCKET) {
+        socket_close(mobile->device_auth_dns.sock);
+    }
     socket_close(bgb_sock);
 
 #ifdef _WIN32

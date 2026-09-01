@@ -11,6 +11,8 @@ import threading
 import select
 import unittest
 import atexit
+import hashlib
+import hmac
 
 
 class BGBMaster:
@@ -728,6 +730,41 @@ def mobile_process_test(*args, **kwargs):
     return _deco
 
 
+# Layout of the device-auth config.bin extension area, mirroring
+# libmobile/config.c's config_device_auth_load()/config_device_auth_save():
+# offset 0x160, 'D','A',0, a little-endian checksum over everything from
+# offset 0x05 onward, the 32-byte key, then an 8-byte little-endian counter.
+# The library only provisions the key/counter by reading it back from this
+# file, so tests that want device-auth active have to write it here
+# themselves, before the "mobile" process is started (it's only read once,
+# at startup).
+DEVICE_AUTH_OFFSET = 0x160
+DEVICE_AUTH_SIZE = 0x2D
+
+
+def provision_device_auth(path, key, counter=0):
+    assert len(key) == 32
+    body = bytearray(DEVICE_AUTH_SIZE)
+    body[0:3] = b"DA\x00"
+    body[5:0x25] = key
+    body[0x25:0x2D] = counter.to_bytes(8, "little")
+    csum = sum(body[5:]) & 0xFFFF
+    body[3] = csum & 0xFF
+    body[4] = (csum >> 8) & 0xFF
+
+    if not os.path.exists(path):
+        with open(path, "wb") as f:
+            f.write(b"\x00" * 0x200)
+    with open(path, "r+b") as f:
+        f.seek(DEVICE_AUTH_OFFSET)
+        f.write(bytes(body))
+
+
+def device_auth_sig(key, ppp_id, action, counter):
+    msg = f"{ppp_id}|{action}|{counter}".encode()
+    return hmac.new(key, msg, hashlib.sha256).hexdigest()
+
+
 class Tests(unittest.TestCase):
     @mobile_process_test("--device", "9")
     def test_simple(self, m):
@@ -906,6 +943,83 @@ class Tests(unittest.TestCase):
         m.cmd_ppp_disconnect()
         m.cmd_offline()
         m.cmd_end()
+
+    def test_device_auth_dns_discovery(self):
+        # No --device-auth override: the device-auth server address must be
+        # discovered by resolving device.auth.dion.ne.jp against --dns1,
+        # same as the emulated game's own DNS traffic. SimpleDNSServer
+        # answers any unrecognized name with 127.0.0.1 by default.
+        with SimpleDNSServer():
+            m_proc = MobileProcess("--dns1", "127.0.0.1", "--dns_port", "8753")
+            m_proc.run()
+            m = m_proc.mob
+            m.cmd_start()
+            time.sleep(1)
+            m.cmd_end()
+            out, err = m_proc.close()
+        err = err.decode()
+        self.assertIn(
+            "[dns-resolve] device.auth.dion.ne.jp resolved to 127.0.0.1",
+            err)
+
+    @unittest.skipUnless(
+        hasattr(os, "geteuid") and os.geteuid() == 0,
+        "Needs to bind port 110 to stand in as the fake POP3 server the "
+        "emulated game connects to -- the real 'mobile' process itself "
+        "never binds that port, it only ever connects out to it, so this "
+        "is purely a test-environment requirement, not a product one.")
+    def test_device_auth(self):
+        key = bytes(range(32))
+        provision_device_auth("config_test.bin", key)
+
+        device_auth_port = 8768
+        m_proc = MobileProcess(
+            "--device-auth", "127.0.0.1",
+            "--device-auth-port", str(device_auth_port))
+        m_proc.run()
+        m = m_proc.mob
+        try:
+            m.cmd_start()
+            m.cmd_tel("0755311973")
+            m.cmd_ppp_connect(s_id="g000000034")
+
+            # Connecting to port 110 should authorize
+            with SimpleTCPServer("127.0.0.1", 110) as mail:
+                with SimpleTCPServer("127.0.0.1", device_auth_port) as auth:
+                    cc = m.cmd_tcp_connect((127, 0, 0, 1), 110)
+                    mail.accept()
+                    auth.accept()
+                    req = auth.recv(4096).decode()
+
+                line = req.split("\r\n", 1)[0]
+                self.assertTrue(
+                    line.startswith("GET /api/adapter/device-auth?"))
+                query = line.split("?", 1)[1].split(" ", 1)[0]
+                params = dict(p.split("=", 1) for p in query.split("&"))
+                self.assertEqual(params["ppp_id"], "g000000034")
+                self.assertEqual(params["action"], "authorize")
+                self.assertEqual(params["sig"], device_auth_sig(
+                    key, "g000000034", "authorize", params["counter"]))
+
+                # Disconnecting it should deauthorize
+                with SimpleTCPServer("127.0.0.1", device_auth_port) as auth:
+                    m.cmd_tcp_disconnect(cc)
+                    auth.accept()
+                    req = auth.recv(4096).decode()
+
+            line = req.split("\r\n", 1)[0]
+            query = line.split("?", 1)[1].split(" ", 1)[0]
+            params = dict(p.split("=", 1) for p in query.split("&"))
+            self.assertEqual(params["ppp_id"], "g000000034")
+            self.assertEqual(params["action"], "deauthorize")
+            self.assertEqual(params["sig"], device_auth_sig(
+                key, "g000000034", "deauthorize", params["counter"]))
+
+            m.cmd_ppp_disconnect()
+            m.cmd_offline()
+            m.cmd_end()
+        finally:
+            m_proc.close()
 
     @unittest.skipIf(os.getenv("TEST_CFG_REALRELAY"), "Needs fake relay")
     @mobile_process_test("--relay", "127.0.0.1")
