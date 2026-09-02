@@ -1045,9 +1045,13 @@ class Tests(unittest.TestCase):
                 self.assertEqual(params["sig"], device_auth_sig(
                     key, "g000000034", "authorize", params["counter"]))
 
-                # Disconnecting it should deauthorize
+                # Authorize is scoped to the whole PPP session now (not the
+                # mail connection specifically): only PPP disconnect, not
+                # closing this one connection, should deauthorize (see
+                # do_ppp_disconnect(), which also closes any connections
+                # -- like this one -- still open at that point).
                 with SimpleTCPServer("127.0.0.1", device_auth_port) as auth:
-                    m.cmd_tcp_disconnect(cc)
+                    m.cmd_ppp_disconnect()
                     auth.accept()
                     req = auth.recv(4096).decode()
                     auth.send(http_ok)
@@ -1060,7 +1064,6 @@ class Tests(unittest.TestCase):
             self.assertEqual(params["sig"], device_auth_sig(
                 key, "g000000034", "deauthorize", params["counter"]))
 
-            m.cmd_ppp_disconnect()
             m.cmd_offline()
             m.cmd_end()
         finally:
