@@ -430,19 +430,54 @@ class MobileProcess:
     def run(self):
         self.bgb = BGBMaster(port=self.port)
         print(*self.exe, file=sys.stderr)
+        self.out_chunks = []
+        self.err_chunks = []
+        self.out_thread = None
+        self.err_thread = None
         if not os.getenv("TEST_CFG_NOEXE"):
             if os.getenv("TEST_CFG_NOPIPE"):
                 self.sub = subprocess.Popen(self.exe)
             else:
                 self.sub = subprocess.Popen(self.exe, stdout=subprocess.PIPE,
                                             stderr=subprocess.PIPE)
+                # Drain both pipes continuously instead of only reading
+                # them at the very end (communicate() in close()/kill()):
+                # a pipe's OS buffer is a fixed, fairly small size (~64KB
+                # on Linux), and the debug logging "mobile" does (which can
+                # add up over a whole test) blocks on write() once it
+                # fills, with nobody reading, for as long as nobody reads
+                # -- which without this would only happen after the test
+                # body finishes, deadlocking the process against the test
+                # driving it over the (separate) BGB link socket.
+                self.out_thread = threading.Thread(
+                    target=self._drain,
+                    args=(self.sub.stdout, self.out_chunks), daemon=True)
+                self.err_thread = threading.Thread(
+                    target=self._drain,
+                    args=(self.sub.stderr, self.err_chunks), daemon=True)
+                self.out_thread.start()
+                self.err_thread.start()
         self.bgb.accept()
         self.mob = Mobile(self.bgb)
+
+    @staticmethod
+    def _drain(pipe, chunks):
+        try:
+            for chunk in iter(lambda: pipe.read(4096), b""):
+                chunks.append(chunk)
+        except (ValueError, OSError):
+            pass
 
     def communicate(self):
         out, err = b"", b""
         if self.sub:
-            out, err = self.sub.communicate(timeout=10)
+            self.sub.wait(timeout=10)
+            if self.out_thread:
+                self.out_thread.join(timeout=10)
+            if self.err_thread:
+                self.err_thread.join(timeout=10)
+            out = b"".join(self.out_chunks)
+            err = b"".join(self.err_chunks)
             self.sub = None
         return out, err
 
