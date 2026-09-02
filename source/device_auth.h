@@ -21,6 +21,13 @@
 // after this many seconds, so it doesn't hold up a pending slot forever.
 #define DEVICE_AUTH_TIMEOUT_SECONDS 10
 
+// Once the request is fully sent, how long to wait for the server to
+// finish writing its response and close, before giving up on draining it.
+// Closing the socket without doing this can send the server a RST instead
+// of a clean FIN if any response bytes are already queued unread, which is
+// exactly what shows up server-side as a client that hung up early.
+#define DEVICE_AUTH_DRAIN_TIMEOUT_SECONDS 3
+
 // The device-auth contract is plain HTTP, no TLS.
 #define DEVICE_AUTH_DEFAULT_PORT 80
 
@@ -29,6 +36,7 @@ struct device_auth_request {
     char data[DEVICE_AUTH_REQUEST_MAXLEN];
     unsigned length;
     unsigned sent;
+    bool draining;
     time_t started;
 };
 

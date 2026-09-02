@@ -983,6 +983,9 @@ class Tests(unittest.TestCase):
             m.cmd_tel("0755311973")
             m.cmd_ppp_connect(s_id="g000000034")
 
+            http_ok = (b"HTTP/1.1 200 OK\r\n"
+                      b"Content-Length: 0\r\nConnection: close\r\n\r\n")
+
             # Connecting to port 110 should authorize
             with SimpleTCPServer("127.0.0.1", 110) as mail:
                 with SimpleTCPServer("127.0.0.1", device_auth_port) as auth:
@@ -990,6 +993,12 @@ class Tests(unittest.TestCase):
                     mail.accept()
                     auth.accept()
                     req = auth.recv(4096).decode()
+                    # Respond and close right away, like nginx would with
+                    # Connection: close -- this is what device_auth.c has
+                    # to drain properly instead of closing on its own first
+                    # (see the drain fix: closing without reading the
+                    # response causes a 499/RST server-side).
+                    auth.send(http_ok)
 
                 line = req.split("\r\n", 1)[0]
                 self.assertTrue(
@@ -1006,6 +1015,7 @@ class Tests(unittest.TestCase):
                     m.cmd_tcp_disconnect(cc)
                     auth.accept()
                     req = auth.recv(4096).decode()
+                    auth.send(http_ok)
 
             line = req.split("\r\n", 1)[0]
             query = line.split("?", 1)[1].split(" ", 1)[0]

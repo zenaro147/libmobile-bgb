@@ -153,6 +153,7 @@ void device_auth_notify(struct device_auth_state *state, enum mobile_device_auth
         " HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", host);
     req->length = (unsigned)(p - req->data);
     req->sent = 0;
+    req->draining = false;
     req->started = time(NULL);
 
     // TEMPORARY (integration-testing phase): log every outgoing request.
@@ -165,8 +166,45 @@ void device_auth_notify(struct device_auth_state *state, enum mobile_device_auth
     req->sock = sock;
 }
 
+static void request_poll_drain(struct device_auth_request *req)
+{
+    if (difftime(time(NULL), req->started) > DEVICE_AUTH_DRAIN_TIMEOUT_SECONDS) {
+        fprintf(stderr, "[device-auth] timed out draining response, "
+            "closing anyway\n");
+        request_close(req);
+        return;
+    }
+
+    // Discard whatever's there: only the HTTP status matters, and the
+    // server already tolerates missed/duplicate authorize/deauthorize
+    // events via its TTL, so there's no need to actually parse it. But we
+    // do need to read until EOF (rather than closing right away) so the
+    // server sees a clean disconnect after writing its response, instead
+    // of us hanging up on it mid-write.
+    for (;;) {
+        char buf[256];
+        int rc = recv(req->sock, buf, sizeof(buf), 0);
+        if (rc == SOCKET_ERROR) {
+            if (socket_geterror() == SOCKET_EWOULDBLOCK) return;
+            request_close(req);
+            return;
+        }
+        if (rc == 0) {
+            // TEMPORARY (integration-testing phase): confirm delivery.
+            fprintf(stderr, "[device-auth] <- response drained, closing\n");
+            request_close(req);
+            return;
+        }
+    }
+}
+
 static void request_poll(struct device_auth_request *req)
 {
+    if (req->draining) {
+        request_poll_drain(req);
+        return;
+    }
+
     if (difftime(time(NULL), req->started) > DEVICE_AUTH_TIMEOUT_SECONDS) {
         fprintf(stderr, "[device-auth] request timed out, giving up\n");
         request_close(req);
@@ -198,13 +236,12 @@ static void request_poll(struct device_auth_request *req)
         req->sent += (unsigned)rc;
     }
 
-    // Request fully handed to the kernel to send. Only the HTTP status
-    // matters, and the server already tolerates missed/duplicate
-    // authorize/deauthorize events via its TTL, so there's no need to wait
-    // around for (or even read) the response.
-    // TEMPORARY (integration-testing phase): confirm delivery.
-    fprintf(stderr, "[device-auth] <- request fully sent\n");
-    request_close(req);
+    // Request fully handed to the kernel to send. Switch to draining the
+    // response instead of closing right away (see request_poll_drain()).
+    fprintf(stderr, "[device-auth] <- request fully sent, "
+        "draining response\n");
+    req->draining = true;
+    req->started = time(NULL);
 }
 
 void device_auth_poll(struct device_auth_state *state)
