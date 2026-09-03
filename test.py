@@ -999,75 +999,81 @@ class Tests(unittest.TestCase):
 
     @unittest.skipUnless(
         hasattr(os, "geteuid") and os.geteuid() == 0,
-        "Needs to bind port 110 to stand in as the fake POP3 server the "
-        "emulated game connects to -- the real 'mobile' process itself "
-        "never binds that port, it only ever connects out to it, so this "
-        "is purely a test-environment requirement, not a product one.")
+        "Needs to bind ports 110 and 80 to stand in as the fake POP3 and "
+        "device-auth servers the emulated game/adapter connect to -- the "
+        "real 'mobile' process itself never binds either, it only ever "
+        "connects out to them (device-auth's address/port aren't "
+        "overridable from the CLI, on purpose -- see main.c), so this is "
+        "purely a test-environment requirement, not a product one.")
     def test_device_auth(self):
         key = bytes(range(32))
         provision_device_auth("config_test.bin", key)
+        device_auth_port = 80
 
-        device_auth_port = 8768
-        m_proc = MobileProcess(
-            "--device-auth", "127.0.0.1",
-            "--device-auth-port", str(device_auth_port))
-        m_proc.run()
-        m = m_proc.mob
-        try:
-            m.cmd_start()
-            m.cmd_tel("0755311973")
-            m.cmd_ppp_connect(s_id="g000000034")
+        # device-auth's server is only ever discovered via DNS now (no CLI
+        # override), so a fake DNS server answering device.auth.dion.ne.jp
+        # has to be up before the process even starts.
+        with SimpleDNSServer():
+            m_proc = MobileProcess("--dns1", "127.0.0.1", "--dns_port", "8753")
+            m_proc.run()
+            m = m_proc.mob
+            try:
+                m.cmd_start()
+                m.cmd_tel("0755311973")
+                m.cmd_ppp_connect(s_id="g000000034")
 
-            http_ok = (b"HTTP/1.1 200 OK\r\n"
-                      b"Content-Length: 0\r\nConnection: close\r\n\r\n")
+                http_ok = (b"HTTP/1.1 200 OK\r\n"
+                          b"Content-Length: 0\r\nConnection: close\r\n\r\n")
 
-            # Connecting to port 110 should authorize
-            with SimpleTCPServer("127.0.0.1", 110) as mail:
-                with SimpleTCPServer("127.0.0.1", device_auth_port) as auth:
-                    cc = m.cmd_tcp_connect((127, 0, 0, 1), 110)
-                    mail.accept()
-                    auth.accept()
-                    req = auth.recv(4096).decode()
-                    # Respond and close right away, like nginx would with
-                    # Connection: close -- this is what device_auth.c has
-                    # to drain properly instead of closing on its own first
-                    # (see the drain fix: closing without reading the
-                    # response causes a 499/RST server-side).
-                    auth.send(http_ok)
+                # Connecting to port 110 should authorize
+                with SimpleTCPServer("127.0.0.1", 110) as mail:
+                    with SimpleTCPServer("127.0.0.1", device_auth_port) as auth:
+                        cc = m.cmd_tcp_connect((127, 0, 0, 1), 110)
+                        mail.accept()
+                        auth.accept()
+                        req = auth.recv(4096).decode()
+                        # Respond and close right away, like nginx would
+                        # with Connection: close -- this is what
+                        # device_auth.c has to drain properly instead of
+                        # closing on its own first (see the drain fix:
+                        # closing without reading the response causes a
+                        # 499/RST server-side).
+                        auth.send(http_ok)
+
+                    line = req.split("\r\n", 1)[0]
+                    self.assertTrue(
+                        line.startswith("GET /api/adapter/device-auth?"))
+                    query = line.split("?", 1)[1].split(" ", 1)[0]
+                    params = dict(p.split("=", 1) for p in query.split("&"))
+                    self.assertEqual(params["ppp_id"], "g000000034")
+                    self.assertEqual(params["action"], "authorize")
+                    self.assertEqual(params["sig"], device_auth_sig(
+                        key, "g000000034", "authorize", params["counter"]))
+
+                    # Authorize is scoped to the whole PPP session now (not
+                    # the mail connection specifically): only PPP
+                    # disconnect, not closing this one connection, should
+                    # deauthorize (see do_ppp_disconnect(), which also
+                    # closes any connections -- like this one -- still
+                    # open at that point).
+                    with SimpleTCPServer("127.0.0.1", device_auth_port) as auth:
+                        m.cmd_ppp_disconnect()
+                        auth.accept()
+                        req = auth.recv(4096).decode()
+                        auth.send(http_ok)
 
                 line = req.split("\r\n", 1)[0]
-                self.assertTrue(
-                    line.startswith("GET /api/adapter/device-auth?"))
                 query = line.split("?", 1)[1].split(" ", 1)[0]
                 params = dict(p.split("=", 1) for p in query.split("&"))
                 self.assertEqual(params["ppp_id"], "g000000034")
-                self.assertEqual(params["action"], "authorize")
+                self.assertEqual(params["action"], "deauthorize")
                 self.assertEqual(params["sig"], device_auth_sig(
-                    key, "g000000034", "authorize", params["counter"]))
+                    key, "g000000034", "deauthorize", params["counter"]))
 
-                # Authorize is scoped to the whole PPP session now (not the
-                # mail connection specifically): only PPP disconnect, not
-                # closing this one connection, should deauthorize (see
-                # do_ppp_disconnect(), which also closes any connections
-                # -- like this one -- still open at that point).
-                with SimpleTCPServer("127.0.0.1", device_auth_port) as auth:
-                    m.cmd_ppp_disconnect()
-                    auth.accept()
-                    req = auth.recv(4096).decode()
-                    auth.send(http_ok)
-
-            line = req.split("\r\n", 1)[0]
-            query = line.split("?", 1)[1].split(" ", 1)[0]
-            params = dict(p.split("=", 1) for p in query.split("&"))
-            self.assertEqual(params["ppp_id"], "g000000034")
-            self.assertEqual(params["action"], "deauthorize")
-            self.assertEqual(params["sig"], device_auth_sig(
-                key, "g000000034", "deauthorize", params["counter"]))
-
-            m.cmd_offline()
-            m.cmd_end()
-        finally:
-            m_proc.close()
+                m.cmd_offline()
+                m.cmd_end()
+            finally:
+                m_proc.close()
 
     @unittest.skipIf(os.getenv("TEST_CFG_REALRELAY"), "Needs fake relay")
     @mobile_process_test("--relay", "127.0.0.1")

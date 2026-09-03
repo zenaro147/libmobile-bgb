@@ -285,10 +285,6 @@ static void show_help_full(void)
         "--relay addr        Set relay server for P2P communications\n"
         "--relay-token hex   Set relay token (or empty to clear)\n"
         "--no-port-redir     Set the adapter to use port 25 during SMTP requests\n"
-        "--device-auth addr  Override the device-auth server address instead of\n"
-        "                    discovering it via DNS\n"
-        "--device-auth-port port  Set the device-auth server port "
-            "(default 80)\n"
     );
     exit(EXIT_SUCCESS);
 }
@@ -301,10 +297,10 @@ static void main_checkparam(char *argv[])
     }
 }
 
-static void main_parse_addr(struct mobile_addr *dest, char *argv[])
+static bool main_parse_addr_str(struct mobile_addr *dest, const char *str)
 {
     unsigned char ip[MOBILE_INET_PTON_MAXLEN];
-    int rc = mobile_inet_pton(MOBILE_INET_PTON_ANY, argv[1], ip);
+    int rc = mobile_inet_pton(MOBILE_INET_PTON_ANY, str, ip);
 
     struct mobile_addr4 *dest4 = (struct mobile_addr4 *)dest;
     struct mobile_addr6 *dest6 = (struct mobile_addr6 *)dest;
@@ -312,12 +308,19 @@ static void main_parse_addr(struct mobile_addr *dest, char *argv[])
     case MOBILE_INET_PTON_IPV4:
         dest4->type = MOBILE_ADDRTYPE_IPV4;
         memcpy(dest4->host, ip, sizeof(dest4->host));
-        break;
+        return true;
     case MOBILE_INET_PTON_IPV6:
         dest6->type = MOBILE_ADDRTYPE_IPV6;
         memcpy(dest6->host, ip, sizeof(dest6->host));
-        break;
+        return true;
     default:
+        return false;
+    }
+}
+
+static void main_parse_addr(struct mobile_addr *dest, char *argv[])
+{
+    if (!main_parse_addr_str(dest, argv[1])) {
         fprintf(stderr, "Invalid parameter for %s: %s\n", argv[0], argv[1]);
         show_help();
     }
@@ -380,8 +383,6 @@ int main(int argc, char *argv[])
     bool relay_token_update = false;
     unsigned char *relay_token = NULL;
     unsigned char relay_token_buf[MOBILE_RELAY_TOKEN_SIZE];
-    struct mobile_addr device_auth_addr = {0};
-    unsigned device_auth_port = DEVICE_AUTH_DEFAULT_PORT;
 
     (void)argc;
     while (*++argv) {
@@ -449,14 +450,6 @@ int main(int argc, char *argv[])
             argv += 1;
         } else if (strcmp(*argv, "--no-port-redir") == 0) {
             change_mail_port = false;
-        } else if (strcmp(*argv, "--device-auth") == 0) {
-            main_checkparam(argv);
-            main_parse_addr(&device_auth_addr, argv);
-            argv += 1;
-        } else if (strcmp(*argv, "--device-auth-port") == 0) {
-            main_checkparam(argv);
-            device_auth_port = strtol(argv[1], NULL, 0);
-            argv += 1;
         } else {
             fprintf(stderr, "Unknown option: %s\n", *argv);
             show_help();
@@ -536,19 +529,34 @@ int main(int argc, char *argv[])
     }
     mobile_config_save(mobile->adapter);
 
-    // Set up the device-auth HTTP client. If the user didn't override the
-    // server address explicitly, discover it via DNS instead (see
-    // dns_resolve.c); device_auth stays disabled (a no-op) until that
-    // finishes.
-    if (device_auth_addr.type != MOBILE_ADDRTYPE_NONE) {
-        main_set_port(&device_auth_addr, device_auth_port);
-        device_auth_init(&mobile->device_auth, &device_auth_addr);
-    } else {
-        device_auth_init(&mobile->device_auth, NULL);
-        mobile->device_auth_dns_pending = true;
-        dns_resolve_start(&mobile->device_auth_dns, DEVICE_AUTH_HOSTNAME,
-            &dns1, &dns2);
+    // Set up the device-auth HTTP client. Its server is always discovered
+    // via DNS (see dns_resolve.c) -- there is deliberately no CLI/env way
+    // to redirect it, since that would defeat the whole point of it being
+    // trustworthy. device_auth stays disabled (a no-op) until that
+    // resolution finishes.
+#ifdef DEVICE_AUTH_OVERRIDE_HOST
+    // Local development/testing only, and only ever reachable by
+    // recompiling with it explicitly set: e.g.
+    //   -DDEVICE_AUTH_OVERRIDE_HOST='"127.0.0.1"' -DDEVICE_AUTH_OVERRIDE_PORT=8768
+    // A build meant to be distributed or run against the real service
+    // must never define this.
+    struct mobile_addr device_auth_override = {0};
+    if (!main_parse_addr_str(&device_auth_override, DEVICE_AUTH_OVERRIDE_HOST)) {
+        fprintf(stderr, "Invalid DEVICE_AUTH_OVERRIDE_HOST\n");
+        goto error;
     }
+#ifdef DEVICE_AUTH_OVERRIDE_PORT
+    main_set_port(&device_auth_override, DEVICE_AUTH_OVERRIDE_PORT);
+#else
+    main_set_port(&device_auth_override, DEVICE_AUTH_DEFAULT_PORT);
+#endif
+    device_auth_init(&mobile->device_auth, &device_auth_override);
+#else
+    device_auth_init(&mobile->device_auth, NULL);
+    mobile->device_auth_dns_pending = true;
+    dns_resolve_start(&mobile->device_auth_dns, DEVICE_AUTH_HOSTNAME,
+        &dns1, &dns2);
+#endif
 
     // Initialize windows sockets
 #ifdef _WIN32
@@ -615,7 +623,7 @@ int main(int argc, char *argv[])
                 mobile->device_auth_dns_pending = false;
                 if (mobile->device_auth_dns.success) {
                     main_set_port(&mobile->device_auth_dns.result,
-                        device_auth_port);
+                        DEVICE_AUTH_DEFAULT_PORT);
                     device_auth_init(&mobile->device_auth,
                         &mobile->device_auth_dns.result);
                 } else {
