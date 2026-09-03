@@ -530,33 +530,14 @@ int main(int argc, char *argv[])
     mobile_config_save(mobile->adapter);
 
     // Set up the device-auth HTTP client. Its server is always discovered
-    // via DNS (see dns_resolve.c) -- there is deliberately no CLI/env way
-    // to redirect it, since that would defeat the whole point of it being
-    // trustworthy. device_auth stays disabled (a no-op) until that
-    // resolution finishes.
-#ifdef DEVICE_AUTH_OVERRIDE_HOST
-    // Local development/testing only, and only ever reachable by
-    // recompiling with it explicitly set: e.g.
-    //   -DDEVICE_AUTH_OVERRIDE_HOST='"127.0.0.1"' -DDEVICE_AUTH_OVERRIDE_PORT=8768
-    // A build meant to be distributed or run against the real service
-    // must never define this.
-    struct mobile_addr device_auth_override = {0};
-    if (!main_parse_addr_str(&device_auth_override, DEVICE_AUTH_OVERRIDE_HOST)) {
-        fprintf(stderr, "Invalid DEVICE_AUTH_OVERRIDE_HOST\n");
-        goto error;
-    }
-#ifdef DEVICE_AUTH_OVERRIDE_PORT
-    main_set_port(&device_auth_override, DEVICE_AUTH_OVERRIDE_PORT);
-#else
-    main_set_port(&device_auth_override, DEVICE_AUTH_DEFAULT_PORT);
-#endif
-    device_auth_init(&mobile->device_auth, &device_auth_override);
-#else
+    // via DNS (see dns_resolve.c), unconditionally -- there is no CLI, env,
+    // or compile-time way to redirect it, since that would defeat the
+    // whole point of it being trustworthy. device_auth stays disabled (a
+    // no-op) until that resolution finishes.
     device_auth_init(&mobile->device_auth, NULL);
     mobile->device_auth_dns_pending = true;
     dns_resolve_start(&mobile->device_auth_dns, DEVICE_AUTH_HOSTNAME,
         &dns1, &dns2);
-#endif
 
     // Initialize windows sockets
 #ifdef _WIN32
