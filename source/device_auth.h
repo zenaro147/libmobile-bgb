@@ -41,15 +41,14 @@ struct device_auth_request {
 };
 
 struct device_auth_state {
-    bool enabled;
-    struct mobile_addr addr;
     struct device_auth_request pending[DEVICE_AUTH_MAX_PENDING];
 };
 
-// Initializes the device-auth client. If <addr> is NULL, or wasn't
-// configured (type MOBILE_ADDRTYPE_NONE), the client stays disabled and
-// device_auth_notify() becomes a no-op.
-void device_auth_init(struct device_auth_state *state, const struct mobile_addr *addr);
+// Initializes the device-auth client. Always enabled: the core only ever
+// calls the triggering callback once a device_auth_key has been
+// provisioned and the server's address has been resolved, so there's
+// nothing left for us to gate on.
+void device_auth_init(struct device_auth_state *state);
 
 // Closes any sockets still in flight. Best-effort: in-flight requests are
 // simply abandoned, relying on the server-side authorization TTL as a
@@ -59,8 +58,10 @@ void device_auth_stop(struct device_auth_state *state);
 // Signs and enqueues a device-auth HTTP request. Never blocks: only copies
 // the already-signed fields into a pending slot and kicks off a
 // non-blocking connect(), matching the requirement that
-// mobile_func_update_device_auth must not block.
-void device_auth_notify(struct device_auth_state *state, enum mobile_device_auth_action action, const unsigned char *ppp_id, unsigned ppp_id_size, uint64_t counter, const unsigned char *sig);
+// mobile_func_update_device_auth must not block. <addr_ipv4> is the
+// already-resolved server address (MOBILE_HOSTLEN_IPV4 bytes) the core
+// hands us -- we no longer resolve anything ourselves.
+void device_auth_notify(struct device_auth_state *state, enum mobile_device_auth_action action, const unsigned char *ppp_id, unsigned ppp_id_size, uint64_t counter, const unsigned char *sig, const unsigned char *addr_ipv4);
 
 // Progresses any in-flight connect()/send() calls. Must be called
 // periodically (e.g. once per main loop iteration); never blocks.

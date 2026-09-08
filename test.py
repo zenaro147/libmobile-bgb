@@ -979,24 +979,6 @@ class Tests(unittest.TestCase):
         m.cmd_offline()
         m.cmd_end()
 
-    def test_device_auth_dns_discovery(self):
-        # No --device-auth override: the device-auth server address must be
-        # discovered by resolving device.auth.dion.ne.jp against --dns1,
-        # same as the emulated game's own DNS traffic. SimpleDNSServer
-        # answers any unrecognized name with 127.0.0.1 by default.
-        with SimpleDNSServer():
-            m_proc = MobileProcess("--dns1", "127.0.0.1", "--dns_port", "8753")
-            m_proc.run()
-            m = m_proc.mob
-            m.cmd_start()
-            time.sleep(1)
-            m.cmd_end()
-            out, err = m_proc.close()
-        err = err.decode()
-        self.assertIn(
-            "[dns-resolve] device.auth.dion.ne.jp resolved to 127.0.0.1",
-            err)
-
     @unittest.skipUnless(
         hasattr(os, "geteuid") and os.geteuid() == 0,
         "Needs to bind ports 110 and 80 to stand in as the fake POP3 and "
@@ -1010,9 +992,13 @@ class Tests(unittest.TestCase):
         provision_device_auth("config_test.bin", key)
         device_auth_port = 80
 
-        # device-auth's server is only ever discovered via DNS now (no CLI
-        # override), so a fake DNS server answering device.auth.dion.ne.jp
-        # has to be up before the process even starts.
+        # device-auth's server address is resolved by libmobile itself now
+        # (no CLI override on our end, and no DNS client of our own either
+        # -- see the device-auth callback's new addr_ipv4 parameter), via
+        # the same --dns1/--dns2 priority the game's own DNS traffic uses.
+        # A fake DNS server answering device.auth.dion.ne.jp needs to be up
+        # for the whole test, since resolution is driven lazily off the
+        # mail-port-connect trigger below, not eagerly at startup anymore.
         with SimpleDNSServer():
             m_proc = MobileProcess("--dns1", "127.0.0.1", "--dns_port", "8753")
             m_proc.run()

@@ -94,10 +94,8 @@ static void request_close(struct device_auth_request *req)
     req->sock = INVALID_SOCKET;
 }
 
-void device_auth_init(struct device_auth_state *state, const struct mobile_addr *addr)
+void device_auth_init(struct device_auth_state *state)
 {
-    state->enabled = addr && addr->type != MOBILE_ADDRTYPE_NONE;
-    if (state->enabled) state->addr = *addr;
     for (unsigned i = 0; i < DEVICE_AUTH_MAX_PENDING; i++) {
         state->pending[i].sock = INVALID_SOCKET;
     }
@@ -110,9 +108,8 @@ void device_auth_stop(struct device_auth_state *state)
     }
 }
 
-void device_auth_notify(struct device_auth_state *state, enum mobile_device_auth_action action, const unsigned char *ppp_id, unsigned ppp_id_size, uint64_t counter, const unsigned char *sig)
+void device_auth_notify(struct device_auth_state *state, enum mobile_device_auth_action action, const unsigned char *ppp_id, unsigned ppp_id_size, uint64_t counter, const unsigned char *sig, const unsigned char *addr_ipv4)
 {
-    if (!state->enabled) return;
     if (ppp_id_size > 0x20) return;
 
     struct device_auth_request *req = find_free_slot(state);
@@ -121,12 +118,18 @@ void device_auth_notify(struct device_auth_state *state, enum mobile_device_auth
         return;
     }
 
+    struct mobile_addr4 addr = {
+        .type = MOBILE_ADDRTYPE_IPV4,
+        .port = DEVICE_AUTH_DEFAULT_PORT,
+    };
+    memcpy(addr.host, addr_ipv4, sizeof(addr.host));
+
     union u_sockaddr u_addr;
     socklen_t sock_addrlen;
-    struct sockaddr *sock_addr = convert_sockaddr(&sock_addrlen, &u_addr, &state->addr);
+    struct sockaddr *sock_addr = convert_sockaddr(&sock_addrlen, &u_addr,
+        (struct mobile_addr *)&addr);
 
-    int family = state->addr.type == MOBILE_ADDRTYPE_IPV4 ? AF_INET : AF_INET6;
-    SOCKET sock = socket(family, SOCK_STREAM, 0);
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock == INVALID_SOCKET) {
         socket_perror("[device-auth] socket");
         return;

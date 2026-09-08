@@ -29,8 +29,6 @@ mobile_SOURCES = \
 	source/bgblink.h \
 	source/device_auth.c \
 	source/device_auth.h \
-	source/dns_resolve.c \
-	source/dns_resolve.h \
 	source/main.c \
 	source/socket.c \
 	source/socket.h \
