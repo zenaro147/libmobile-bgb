@@ -7,7 +7,6 @@
 #include <signal.h>
 #include <wchar.h>
 #include <inttypes.h>
-#include <time.h>
 
 #include <mobile.h>
 #include <mobile_inet.h>
@@ -31,30 +30,9 @@ struct mobile_user {
     char number_peer[MOBILE_MAX_NUMBER_SIZE + 1];
 };
 
-// TEMPORARY (timing investigation): millisecond-precision wall-clock prefix
-// on every protocol trace line, to compare the pacing of test ROM traffic
-// against real games. Revert once that's done.
-static void print_timestamp(FILE *f)
-{
-#if defined(__unix__)
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    struct tm tm;
-    localtime_r(&ts.tv_sec, &tm);
-    fprintf(f, "[%02d:%02d:%02d.%03ld] ", tm.tm_hour, tm.tm_min, tm.tm_sec,
-        ts.tv_nsec / 1000000);
-#elif defined(_WIN32)
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-    fprintf(f, "[%02d:%02d:%02d.%03d] ", st.wHour, st.wMinute, st.wSecond,
-        st.wMilliseconds);
-#endif
-}
-
 static void impl_debug_log(void *user, const char *line)
 {
     (void)user;
-    print_timestamp(stderr);
     fprintf(stderr, "%s\n", line);
 }
 
