@@ -588,7 +588,7 @@ int main(int argc, char *argv[])
     mobile_def_sock_recv(mobile->adapter, impl_sock_recv);
     mobile_def_update_number(mobile->adapter, impl_update_number);
     mobile_def_update_device_auth(mobile->adapter, impl_update_device_auth);
-    mobile_def_device_identity(mobile->adapter, impl_device_identity);
+    mobile_def_device_identity(mobile->adapter, impl_device_identity, "libmobile-bgb");
     mobile_def_device_auth_query(mobile->adapter, impl_device_auth_query);
 
     mobile_config_load(mobile->adapter);
