@@ -681,22 +681,22 @@ class SimpleRelayServer:
                 return
             pair.send(data)
 
-    def handle_call(self, conn, index):
+    def handle_call(self, conn, index, v):
         try:
             number = int(conn.recv(conn.recv(1)[0]).decode())
         except ValueError:
-            conn.send(b'\x00\x00\x01')
+            conn.send(v + b'\x00\x01')
             return False
         pair = self.wait.get(number)
         if pair is None:
-            conn.send(b'\x00\x00\x03')
+            conn.send(v + b'\x00\x03')
             return False
         self.call[number] = (index, conn)
-        conn.send(b'\x00\x00\x00')
+        conn.send(v + b'\x00\x00')
         self.relay(conn, pair)
         return True
 
-    def handle_wait(self, conn, index):
+    def handle_wait(self, conn, index, v):
         self.wait[index] = conn
         try:
             poller = select.poll()
@@ -711,26 +711,54 @@ class SimpleRelayServer:
         del self.call[index]
         num = ("%07d" % caller[0]).encode()
         pair = caller[1]
-        conn.send(b'\x00\x01\x00' + bytes([len(num)]) + num)
+        conn.send(v + b'\x01\x00' + bytes([len(num)]) + num)
         self.relay(conn, pair)
         return True
 
-    def handle_get_number(self, conn, index):
+    def handle_get_number(self, conn, index, v):
         num = ("%07d" % index).encode()
-        conn.send(b'\x00\x02' + bytes([len(num)]) + num)
+        conn.send(v + b'\x02' + bytes([len(num)]) + num)
+
+    def recv_exact(self, conn, n):
+        buf = b""
+        while len(buf) < n:
+            d = conn.recv(n - len(buf))
+            if not d:
+                raise ConnectionResetError
+            buf += d
+        return buf
 
     def handle(self, conn):
-        magic = b'\x00MOBILE'
-        handshake = conn.recv(0x18)
+        # Handshake: [version]"MOBILE" has_token(1) [token(16)], and from
+        # version 1 on, has_device(1) [device(8)] -- the same device id
+        # device-auth sends as device=, so the real relay can refuse a
+        # device blocked on the account page. Like the real relay during
+        # the transition, both versions are accepted here, and every reply
+        # (this one and the per-command ones below) echoes the client's
+        # version byte, which the library checks on each packet.
+        head = self.recv_exact(conn, 7)
+        assert head[1:] == b'MOBILE', head
+        version = head[0]
+        assert version in (0, 1), version
+        magic = bytes([version]) + b'MOBILE'
+        v = magic[:1]
 
-        assert handshake.startswith(magic)
-        if handshake[7] == 0:
+        has_token = self.recv_exact(conn, 1)[0]
+        assert has_token in (0, 1), has_token
+        token = self.recv_exact(conn, 16) if has_token else None
+        if version >= 1:
+            has_device = self.recv_exact(conn, 1)[0]
+            assert has_device in (0, 1), has_device
+            if has_device:
+                self.recv_exact(conn, 8)
+
+        if not has_token:
             self.index += 1
             index = self.index
             token = bytes([index]) * 16
             conn.send(magic + b'\x01' + token)
         else:
-            index = handshake[8]
+            index = token[0]
             conn.send(magic + b'\x00')
 
         while True:
@@ -740,13 +768,13 @@ class SimpleRelayServer:
             assert data[0] == magic[0]
 
             if data[1] == 0:
-                if self.handle_call(conn, index):
+                if self.handle_call(conn, index, v):
                     break
             if data[1] == 1:
-                if self.handle_wait(conn, index):
+                if self.handle_wait(conn, index, v):
                     break
             if data[1] == 2:
-                self.handle_get_number(conn, index)
+                self.handle_get_number(conn, index, v)
 
 
 def mobile_process_test(*args, **kwargs):
