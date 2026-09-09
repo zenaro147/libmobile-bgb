@@ -611,6 +611,21 @@ int main(int argc, char *argv[])
     // since that would defeat the whole point of it being trustworthy.
     device_auth_init(&mobile->device_auth);
 
+    // Show which device this is, so the user can pick this machine out of
+    // the device list on their account page. The code is the core's
+    // rendering, not ours, so it matches the server's character for
+    // character.
+    char pairing_code[MOBILE_PAIRING_CODE_STR_SIZE];
+    char device_id[MOBILE_DEVICE_ID_STR_SIZE];
+    if (mobile_device_auth_get_pairing_code(mobile->adapter, pairing_code) &&
+            mobile_device_auth_get_id(mobile->adapter, device_id)) {
+        fprintf(stderr, "[device-auth] Pairing code: %s (device id %s)\n",
+            pairing_code, device_id);
+    } else {
+        fprintf(stderr, "[device-auth] No device identity available; "
+            "using the account's unnamed device\n");
+    }
+
     // Initialize windows sockets
 #ifdef _WIN32
     WSADATA wsaData;
