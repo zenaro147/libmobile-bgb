@@ -1,4 +1,4 @@
 [submodule "subprojects/libmobile"]
 	path = subprojects/libmobile
-	url = ../libmobile
+	url = https://github.com/zenaror/libmobile
 	branch = feature/full_server
