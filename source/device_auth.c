@@ -192,7 +192,7 @@ void device_auth_notify(struct device_auth_state *state, enum mobile_device_auth
     req->sock = sock;
 }
 
-bool device_auth_query_notify(struct device_auth_state *state, struct mobile_adapter *adapter, const unsigned char *addr_ipv4, const unsigned char *ppp_id, unsigned ppp_id_size, const unsigned char *sig, const char *device)
+bool device_auth_query_notify(struct device_auth_state *state, struct mobile_adapter *adapter, const unsigned char *addr_ipv4, const unsigned char *ppp_id, unsigned ppp_id_size, uint64_t counter, const unsigned char *sig, const char *device)
 {
     if (ppp_id_size > 0x20) return false;
 
@@ -211,7 +211,8 @@ bool device_auth_query_notify(struct device_auth_state *state, struct mobile_ada
     p += snprintf(p, (size_t)(end - p), "GET /api/adapter/device-auth?ppp_id=");
     p += encode_ppp_id(p, ppp_id, ppp_id_size);
     if (device) p += snprintf(p, (size_t)(end - p), "&device=%s", device);
-    p += snprintf(p, (size_t)(end - p), "&action=query&sig=");
+    p += snprintf(p, (size_t)(end - p), "&action=query&counter=%" PRIu64 "&sig=",
+        counter);
     p += encode_hex(p, sig, MOBILE_DEVICE_AUTH_SIG_SIZE);
     unsigned line_len = (unsigned)(p - req->data);
     p += snprintf(p, (size_t)(end - p),
@@ -310,6 +311,17 @@ static void request_poll_drain(struct device_auth_request *req)
                         &status, &body, &body_len) && status == 200) {
                     mobile_device_auth_query_result(req->adapter, body,
                         body_len);
+                    // Only a verified, fresh answer can say YES (the core
+                    // fails open otherwise), so this is worth a line of
+                    // its own: from here on the game sees "no network",
+                    // and its own error screen won't say why.
+                    if (mobile_device_auth_block_state(req->adapter) ==
+                            MOBILE_DEVICE_AUTH_BLOCK_YES) {
+                        fprintf(stderr, "[device-auth] This device is "
+                            "BLOCKED on the account's device list. The "
+                            "game will see no network until it's "
+                            "unblocked there.\n");
+                    }
                 } else {
                     fprintf(stderr, "[device-auth] query response wasn't "
                         "a clean 200, reporting failure\n");

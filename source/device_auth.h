@@ -84,14 +84,16 @@ void device_auth_stop(struct device_auth_state *state);
 void device_auth_notify(struct device_auth_state *state, enum mobile_device_auth_action action, const unsigned char *ppp_id, unsigned ppp_id_size, uint64_t counter, const unsigned char *sig, const unsigned char *addr_ipv4, const char *device);
 
 // Signs and enqueues a device-auth counter-query HTTP request, mirroring
-// device_auth_notify() but read-only (no counter in the request) and with
-// a response that matters: once the connection closes, the raw body is
-// handed to mobile_device_auth_query_result() on a 200, or NULL on any
-// failure -- connect, send, timeout, a non-200 status, or a response that
-// never finds its header/body separator. <adapter> is threaded through
-// only to make that call. Returns whether the request was accepted,
-// matching mobile_func_device_auth_query()'s own contract -- never blocks.
-bool device_auth_query_notify(struct device_auth_state *state, struct mobile_adapter *adapter, const unsigned char *addr_ipv4, const unsigned char *ppp_id, unsigned ppp_id_size, const unsigned char *sig, const char *device);
+// device_auth_notify() (same shape, action=query; <counter> is the value
+// the core spent on this query, and goes in the request just as it would
+// for an authorization) but with a response that matters: once the
+// connection closes, the raw body is handed to
+// mobile_device_auth_query_result() on a 200, or NULL on any failure --
+// connect, send, timeout, a non-200 status, or a response that never
+// finds its header/body separator. <adapter> is threaded through only to
+// make that call. Returns whether the request was accepted, matching
+// mobile_func_device_auth_query()'s own contract -- never blocks.
+bool device_auth_query_notify(struct device_auth_state *state, struct mobile_adapter *adapter, const unsigned char *addr_ipv4, const unsigned char *ppp_id, unsigned ppp_id_size, uint64_t counter, const unsigned char *sig, const char *device);
 
 // Progresses any in-flight connect()/send() calls. Must be called
 // periodically (e.g. once per main loop iteration); never blocks.
