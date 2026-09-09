@@ -16,6 +16,10 @@
 #include "socket_impl.h"
 #include "device_auth.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 struct mobile_user {
     struct mobile_adapter *adapter;
     struct socket_impl socket;
@@ -156,17 +160,82 @@ static void impl_update_number(void *user, enum mobile_number type, const char *
     update_title(mobile);
 }
 
-static void impl_update_device_auth(void *user, enum mobile_device_auth_action action, const unsigned char *ppp_id, unsigned ppp_id_size, uint64_t counter, const unsigned char *sig, const unsigned char *addr_ipv4)
+static void impl_update_device_auth(void *user, enum mobile_device_auth_action action, const unsigned char *ppp_id, unsigned ppp_id_size, uint64_t counter, const unsigned char *sig, const unsigned char *addr_ipv4, const char *device)
 {
     struct mobile_user *mobile = user;
     // TEMPORARY (integration-testing phase): confirm the core is firing
     // the callback at all, before device_auth even gets involved.
     fprintf(stderr, "[device-auth] callback fired: action=%s ppp_id=\"%.*s\" "
-        "counter=%" PRIu64 " addr=%u.%u.%u.%u\n",
+        "counter=%" PRIu64 " addr=%u.%u.%u.%u device=%s\n",
         action == MOBILE_DEVICE_AUTH_AUTHORIZE ? "authorize" : "deauthorize",
         (int)ppp_id_size, ppp_id, counter,
-        addr_ipv4[0], addr_ipv4[1], addr_ipv4[2], addr_ipv4[3]);
-    device_auth_notify(&mobile->device_auth, action, ppp_id, ppp_id_size, counter, sig, addr_ipv4);
+        addr_ipv4[0], addr_ipv4[1], addr_ipv4[2], addr_ipv4[3],
+        device ? device : "(none)");
+    device_auth_notify(&mobile->device_auth, action, ppp_id, ppp_id_size, counter, sig, addr_ipv4, device);
+}
+
+// mobile_func_device_identity: hands the core something stable to derive
+// this installation's device id from, so the server can tell apart the
+// same account's config.bin running on different machines. Never stored
+// in config.bin itself -- that file is meant to be copied between an
+// emulator and real hardware, and an id living there would identify the
+// file, not the machine (see the core's mobile.h for the full rationale).
+static unsigned impl_device_identity(void *user, void *data, unsigned size)
+{
+    (void)user;
+    char *out = data;
+    unsigned len = 0;
+
+#if defined(__unix__)
+    FILE *f = fopen("/etc/machine-id", "r");
+    if (f) {
+        len = (unsigned)fread(out, 1, size, f);
+        fclose(f);
+        while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r')) {
+            len--;
+        }
+    }
+#elif defined(_WIN32)
+    HKEY key;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+            "SOFTWARE\\Microsoft\\Cryptography", 0,
+            KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key) == ERROR_SUCCESS) {
+        char guid[64];
+        DWORD guid_size = sizeof(guid);
+        DWORD type = 0;
+        if (RegQueryValueExA(key, "MachineGuid", NULL, &type,
+                (LPBYTE)guid, &guid_size) == ERROR_SUCCESS &&
+                type == REG_SZ && guid_size > 0) {
+            len = guid_size - 1; // exclude the trailing NUL
+            if (len > size) len = size;
+            memcpy(out, guid, len);
+        }
+        RegCloseKey(key);
+    }
+#endif
+
+    if (len == 0) {
+        // Portable floor: host name plus user name. Not unique against a
+        // deliberately cloned machine, but that's the same limitation the
+        // machine id/GUID sources above already have.
+        char host[256] = {0};
+        char user[256] = {0};
+#if defined(__unix__)
+        gethostname(host, sizeof(host));
+        const char *u = getenv("USER");
+        if (u) strncpy(user, u, sizeof(user) - 1);
+#elif defined(_WIN32)
+        DWORD host_size = sizeof(host);
+        GetComputerNameA(host, &host_size);
+        DWORD user_size = sizeof(user);
+        GetUserNameA(user, &user_size);
+#endif
+        int n = snprintf(out, size, "%s:%s", host, user);
+        len = n < 0 ? 0 : (unsigned)n;
+        if (len > size) len = size;
+    }
+
+    return len;
 }
 
 static volatile bool signal_int_trig = false;
@@ -505,6 +574,7 @@ int main(int argc, char *argv[])
     mobile_def_sock_recv(mobile->adapter, impl_sock_recv);
     mobile_def_update_number(mobile->adapter, impl_update_number);
     mobile_def_update_device_auth(mobile->adapter, impl_update_device_auth);
+    mobile_def_device_identity(mobile->adapter, impl_device_identity);
 
     mobile_config_load(mobile->adapter);
     mobile_config_set_device(mobile->adapter, device, device_unmetered);

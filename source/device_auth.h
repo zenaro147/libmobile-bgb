@@ -60,8 +60,10 @@ void device_auth_stop(struct device_auth_state *state);
 // non-blocking connect(), matching the requirement that
 // mobile_func_update_device_auth must not block. <addr_ipv4> is the
 // already-resolved server address (MOBILE_HOSTLEN_IPV4 bytes) the core
-// hands us -- we no longer resolve anything ourselves.
-void device_auth_notify(struct device_auth_state *state, enum mobile_device_auth_action action, const unsigned char *ppp_id, unsigned ppp_id_size, uint64_t counter, const unsigned char *sig, const unsigned char *addr_ipv4);
+// hands us -- we no longer resolve anything ourselves. <device> is the
+// core's derived device id (MOBILE_DEVICE_ID_STR_SIZE hex digits) to
+// include in the request, or NULL for the older, device-less form.
+void device_auth_notify(struct device_auth_state *state, enum mobile_device_auth_action action, const unsigned char *ppp_id, unsigned ppp_id_size, uint64_t counter, const unsigned char *sig, const unsigned char *addr_ipv4, const char *device);
 
 // Progresses any in-flight connect()/send() calls. Must be called
 // periodically (e.g. once per main loop iteration); never blocks.

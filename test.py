@@ -795,8 +795,11 @@ def provision_device_auth(path, key, counter=0):
         f.write(bytes(body))
 
 
-def device_auth_sig(key, ppp_id, action, counter):
-    msg = f"{ppp_id}|{action}|{counter}".encode()
+def device_auth_sig(key, ppp_id, action, counter, device=None):
+    if device is not None:
+        msg = f"{ppp_id}|{device}|{action}|{counter}".encode()
+    else:
+        msg = f"{ppp_id}|{action}|{counter}".encode()
     return hmac.new(key, msg, hashlib.sha256).hexdigest()
 
 
@@ -1033,8 +1036,17 @@ class Tests(unittest.TestCase):
                     params = dict(p.split("=", 1) for p in query.split("&"))
                     self.assertEqual(params["ppp_id"], "g000000034")
                     self.assertEqual(params["action"], "authorize")
+                    # device is whatever this test machine's
+                    # impl_device_identity() derived (/etc/machine-id,
+                    # MachineGuid, or the host+user fallback) -- not
+                    # reproducible here independently, so trust the request
+                    # and check the signature was computed over it.
+                    device = params.get("device")
+                    if device is not None:
+                        self.assertRegex(device, r"^[0-9a-f]{16}$")
                     self.assertEqual(params["sig"], device_auth_sig(
-                        key, "g000000034", "authorize", params["counter"]))
+                        key, "g000000034", "authorize", params["counter"],
+                        device))
 
                     # Authorize is scoped to the whole PPP session now (not
                     # the mail connection specifically): only PPP
@@ -1053,8 +1065,12 @@ class Tests(unittest.TestCase):
                 params = dict(p.split("=", 1) for p in query.split("&"))
                 self.assertEqual(params["ppp_id"], "g000000034")
                 self.assertEqual(params["action"], "deauthorize")
+                device = params.get("device")
+                if device is not None:
+                    self.assertRegex(device, r"^[0-9a-f]{16}$")
                 self.assertEqual(params["sig"], device_auth_sig(
-                    key, "g000000034", "deauthorize", params["counter"]))
+                    key, "g000000034", "deauthorize", params["counter"],
+                    device))
 
                 m.cmd_offline()
                 m.cmd_end()

@@ -19,6 +19,7 @@ deps += dependency('libmobile', version : '>=0.2.0', static : true)
 
 if host_machine.system() == 'windows'
   deps += cc.find_library('ws2_32')
+  deps += cc.find_library('advapi32')
   c_args += ['-DUNICODE', '-D_UNICODE', '-D_WIN32_WINNT=0x0501']
   c_args += ['-D_CRT_SECURE_NO_WARNINGS']
 endif

@@ -58,7 +58,9 @@ AS_CASE([$host_os], [mingw*], [dnl
     EXTRA_CPPFLAGS="$EXTRA_CPPFLAGS -DUNICODE -D_UNICODE -D_WIN32_WINNT=0x0501"
     EXTRA_CPPFLAGS="$EXTRA_CPPFLAGS -D_CRT_SECURE_NO_WARNINGS"
     AC_CHECK_LIB([ws2_32], [exit], [EXTRA_LIBS="$EXTRA_LIBS -lws2_32"],
-        [AC_MSG_FAILURE([ws2_32 not found])])])
+        [AC_MSG_FAILURE([ws2_32 not found])])
+    AC_CHECK_LIB([advapi32], [exit], [EXTRA_LIBS="$EXTRA_LIBS -ladvapi32"],
+        [AC_MSG_FAILURE([advapi32 not found])])])
 
 AC_CONFIG_HEADERS([autoconf.h])
 AC_CONFIG_FILES([Makefile])

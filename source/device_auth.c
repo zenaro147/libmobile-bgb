@@ -108,7 +108,7 @@ void device_auth_stop(struct device_auth_state *state)
     }
 }
 
-void device_auth_notify(struct device_auth_state *state, enum mobile_device_auth_action action, const unsigned char *ppp_id, unsigned ppp_id_size, uint64_t counter, const unsigned char *sig, const unsigned char *addr_ipv4)
+void device_auth_notify(struct device_auth_state *state, enum mobile_device_auth_action action, const unsigned char *ppp_id, unsigned ppp_id_size, uint64_t counter, const unsigned char *sig, const unsigned char *addr_ipv4, const char *device)
 {
     if (ppp_id_size > 0x20) return;
 
@@ -147,6 +147,7 @@ void device_auth_notify(struct device_auth_state *state, enum mobile_device_auth
     char *end = req->data + sizeof(req->data);
     p += snprintf(p, (size_t)(end - p), "GET /api/adapter/device-auth?ppp_id=");
     p += encode_ppp_id(p, ppp_id, ppp_id_size);
+    if (device) p += snprintf(p, (size_t)(end - p), "&device=%s", device);
     p += snprintf(p, (size_t)(end - p), "&action=%s&counter=%" PRIu64 "&sig=",
         action == MOBILE_DEVICE_AUTH_AUTHORIZE ? "authorize" : "deauthorize",
         counter);
