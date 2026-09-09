@@ -31,6 +31,12 @@
 // The device-auth contract is plain HTTP, no TLS.
 #define DEVICE_AUTH_DEFAULT_PORT 80
 
+// Longest raw HTTP response (status line + headers + body) we'll buffer
+// while waiting on a counter query -- the body itself is only ever up to
+// ~87 bytes ("<20-digit counter> <64 lowercase hex>"), the rest is
+// headroom for a real server's headers.
+#define DEVICE_AUTH_QUERY_RESPONSE_MAXLEN 1024
+
 struct device_auth_request {
     SOCKET sock;
     char data[DEVICE_AUTH_REQUEST_MAXLEN];
@@ -38,6 +44,18 @@ struct device_auth_request {
     unsigned sent;
     bool draining;
     time_t started;
+
+    // Set only for a counter-query request (see device_auth_query_notify()):
+    // rather than being discarded, the response is buffered here and, once
+    // fully received, reported back through mobile_device_auth_query_result()
+    // -- on any failure (connect, send, timeout, non-200 status, or a
+    // response that never finds its header/body separator) that call is
+    // still made, with NULL, since the core is waiting on exactly one
+    // answer per accepted query.
+    bool is_query;
+    struct mobile_adapter *adapter;
+    unsigned char response[DEVICE_AUTH_QUERY_RESPONSE_MAXLEN];
+    unsigned response_len;
 };
 
 struct device_auth_state {
@@ -64,6 +82,16 @@ void device_auth_stop(struct device_auth_state *state);
 // core's derived device id (MOBILE_DEVICE_ID_STR_SIZE hex digits) to
 // include in the request, or NULL for the older, device-less form.
 void device_auth_notify(struct device_auth_state *state, enum mobile_device_auth_action action, const unsigned char *ppp_id, unsigned ppp_id_size, uint64_t counter, const unsigned char *sig, const unsigned char *addr_ipv4, const char *device);
+
+// Signs and enqueues a device-auth counter-query HTTP request, mirroring
+// device_auth_notify() but read-only (no counter in the request) and with
+// a response that matters: once the connection closes, the raw body is
+// handed to mobile_device_auth_query_result() on a 200, or NULL on any
+// failure -- connect, send, timeout, a non-200 status, or a response that
+// never finds its header/body separator. <adapter> is threaded through
+// only to make that call. Returns whether the request was accepted,
+// matching mobile_func_device_auth_query()'s own contract -- never blocks.
+bool device_auth_query_notify(struct device_auth_state *state, struct mobile_adapter *adapter, const unsigned char *addr_ipv4, const unsigned char *ppp_id, unsigned ppp_id_size, const unsigned char *sig, const char *device);
 
 // Progresses any in-flight connect()/send() calls. Must be called
 // periodically (e.g. once per main loop iteration); never blocks.

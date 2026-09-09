@@ -174,6 +174,20 @@ static void impl_update_device_auth(void *user, enum mobile_device_auth_action a
     device_auth_notify(&mobile->device_auth, action, ppp_id, ppp_id_size, counter, sig, addr_ipv4, device);
 }
 
+static bool impl_device_auth_query(void *user, const unsigned char *addr_ipv4, const unsigned char *ppp_id, unsigned ppp_id_size, const unsigned char *sig, const char *device)
+{
+    struct mobile_user *mobile = user;
+    // TEMPORARY (integration-testing phase): confirm the core is firing
+    // the callback at all, before device_auth even gets involved.
+    fprintf(stderr, "[device-auth] query callback fired: ppp_id=\"%.*s\" "
+        "addr=%u.%u.%u.%u device=%s\n",
+        (int)ppp_id_size, ppp_id,
+        addr_ipv4[0], addr_ipv4[1], addr_ipv4[2], addr_ipv4[3],
+        device ? device : "(none)");
+    return device_auth_query_notify(&mobile->device_auth, mobile->adapter,
+        addr_ipv4, ppp_id, ppp_id_size, sig, device);
+}
+
 // mobile_func_device_identity: hands the core something stable to derive
 // this installation's device id from, so the server can tell apart the
 // same account's config.bin running on different machines. Never stored
@@ -575,6 +589,7 @@ int main(int argc, char *argv[])
     mobile_def_update_number(mobile->adapter, impl_update_number);
     mobile_def_update_device_auth(mobile->adapter, impl_update_device_auth);
     mobile_def_device_identity(mobile->adapter, impl_device_identity);
+    mobile_def_device_auth_query(mobile->adapter, impl_device_auth_query);
 
     mobile_config_load(mobile->adapter);
     mobile_config_set_device(mobile->adapter, device, device_unmetered);
