@@ -36,3 +36,5 @@ make
 On windows, you will need a Unix environment, such as [msys2](https://www.msys2.org/). The currently recommended package to install to provide `gcc` is `mingw-w64-x86_64-gcc`. One should use the MINGW64 environment to use it.
 
 Alternatively, a `meson` build is also provided. See its [quickstart guide](https://mesonbuild.com/Quick-guide.html) for more information.
+
+The windows build is reproducible: compiling the same source twice, even at different times, produces a byte-identical `mobile.exe`. This means the sha256 checksum published alongside a release can be used to verify a download -- a mismatch means a different file, never just a different build time.
