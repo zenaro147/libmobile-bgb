@@ -13,9 +13,11 @@ PKG_PROG_PKG_CONFIG
 EXTRA_CPPFLAGS=""
 EXTRA_CFLAGS=""
 EXTRA_LIBS=""
+EXTRA_LDFLAGS=""
 AC_SUBST([EXTRA_CPPFLAGS])
 AC_SUBST([EXTRA_CFLAGS])
 AC_SUBST([EXTRA_LIBS])
+AC_SUBST([EXTRA_LDFLAGS])
 
 AC_DEFUN([MY_CHECK_FLAG], [dnl
 AS_VAR_PUSHDEF([CHECK], [my_cv_check_flag_$1_$2])dnl
@@ -60,7 +62,13 @@ AS_CASE([$host_os], [mingw*], [dnl
     AC_CHECK_LIB([ws2_32], [exit], [EXTRA_LIBS="$EXTRA_LIBS -lws2_32"],
         [AC_MSG_FAILURE([ws2_32 not found])])
     AC_CHECK_LIB([advapi32], [exit], [EXTRA_LIBS="$EXTRA_LIBS -ladvapi32"],
-        [AC_MSG_FAILURE([advapi32 not found])])])
+        [AC_MSG_FAILURE([advapi32 not found])])
+    dnl Without this, the PE header's link timestamp changes every build
+    dnl even with byte-identical source, making a release's published
+    dnl checksum unreproducible and impossible to tell apart from a
+    dnl tampered file.
+    MY_CHECK_FLAG([LDFLAGS], [-Wl,--no-insert-timestamp], [dnl
+        EXTRA_LDFLAGS="$EXTRA_LDFLAGS -Wl,--no-insert-timestamp"])])
 
 AC_CONFIG_HEADERS([autoconf.h])
 AC_CONFIG_FILES([Makefile])

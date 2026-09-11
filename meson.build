@@ -6,6 +6,7 @@ project('libmobile-bgb', 'c',
 
 cc = meson.get_compiler('c')
 c_args = []
+link_args = []
 deps = []
 
 # Enable -ffunction-sections -fdata-sections and -Wl,--gc-sections by default
@@ -22,6 +23,13 @@ if host_machine.system() == 'windows'
   deps += cc.find_library('advapi32')
   c_args += ['-DUNICODE', '-D_UNICODE', '-D_WIN32_WINNT=0x0501']
   c_args += ['-D_CRT_SECURE_NO_WARNINGS']
+
+  # Without this, the PE header's link timestamp changes every build even
+  # with byte-identical source, making a release's published checksum
+  # unreproducible and impossible to tell apart from a tampered file.
+  if cc.has_link_argument('-Wl,--no-insert-timestamp')
+    link_args += ['-Wl,--no-insert-timestamp']
+  endif
 endif
 
 executable('mobile',
@@ -35,5 +43,6 @@ executable('mobile',
   'source/socket_impl.c',
   'source/socket_impl.h',
   c_args : c_args,
+  link_args : link_args,
   dependencies : deps,
   install : true)

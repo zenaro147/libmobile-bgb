@@ -48,6 +48,14 @@ if(WIN32)
     list(APPEND deps ws2_32 advapi32)
     list(APPEND c_defs UNICODE _UNICODE _WIN32_WINNT=0x0501)
     list(APPEND c_defs _CRT_SECURE_NO_WARNINGS)
+
+    # Without this, the PE header's link timestamp changes every build even
+    # with byte-identical source, making a release's published checksum
+    # unreproducible and impossible to tell apart from a tampered file.
+    check_linker_flag(C -Wl,--no-insert-timestamp HAVE_NO_INSERT_TIMESTAMP)
+    if(HAVE_NO_INSERT_TIMESTAMP)
+        add_link_options(-Wl,--no-insert-timestamp)
+    endif()
 endif()
 
 add_executable(mobile

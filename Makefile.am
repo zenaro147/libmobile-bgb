@@ -7,7 +7,7 @@ AM_CFLAGS = $(EXTRA_CFLAGS)
 
 mobile_CPPFLAGS = $(AM_CPPFLAGS)
 mobile_CFLAGS = $(AM_CFLAGS)
-mobile_LDFLAGS = -static
+mobile_LDFLAGS = -static $(EXTRA_LDFLAGS)
 mobile_LDADD = $(EXTRA_LIBS)
 
 if WITH_SYSTEM_LIBMOBILE
