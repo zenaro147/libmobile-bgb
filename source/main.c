@@ -445,7 +445,7 @@ int main(int argc, char *argv[])
     char *host = "127.0.0.1";
     char *port = "8765";
 
-    char *fname_config = "config.bin";
+    char *fname_config = "mobile_config.bin";
     enum mobile_adapter_device device = MOBILE_ADAPTER_BLUE;
     bool device_unmetered = false;
     bool change_mail_port = true;
